@@ -52,7 +52,7 @@ fn parse(
     };
 }
 
-fn run_menu(
+fn runMenu(
     cmd: []const []const u8,
     allocator: mem.Allocator,
     menu_input: []const u8,
@@ -104,7 +104,7 @@ pub fn run(
 
     std.log.debug("menu_input:\n---\n{s}---\n", .{parsed.menu_input});
 
-    const output = try run_menu(
+    const output = try runMenu(
         menu_cmd,
         arena.allocator(),
         parsed.menu_input,
@@ -149,10 +149,10 @@ fn cmdToArgv(allocator: mem.Allocator, command: []const u8) !std.ArrayList([]con
 }
 
 const SiclConfig = struct {
-    menu_cmd: []const u8,
-    csv_path: []const u8,
+    menu_cmd: ?[]const u8,
+    csv_path: ?[]const u8,
 
-    fn default(allocator: mem.Allocator) !SiclConfig {
+    fn default(allocator: mem.Allocator) !@This() {
         const home_dir = std.os.getenv("HOME") orelse return SiclError.HomeNotSet;
         const csv_path = try std.fmt.allocPrint(
             allocator,
@@ -165,6 +165,16 @@ const SiclConfig = struct {
             .menu_cmd = "bemenu",
         };
     }
+
+    fn updateWithConfig(self: *@This(), allocator: mem.Allocator, path: []const u8) !void {
+        var file = try std.fs.openFileAbsolute(path, .{});
+        defer file.close();
+        const content = try file.readToEndAlloc(allocator, 1024 * 1024);
+        const options = try std.json.parseFromSlice(SiclConfig, allocator, content, std.json.ParseOptions{});
+
+        self.menu_cmd = options.menu_cmd orelse self.menu_cmd;
+        self.csv_path = options.csv_path orelse self.csv_path;
+    }
 };
 
 pub fn main() !void {
@@ -173,11 +183,18 @@ pub fn main() !void {
 
     var config = try SiclConfig.default(arena.allocator());
 
+    const home_dir = std.os.getenv("HOME") orelse return SiclError.HomeNotSet;
+    const config_path = try std.fmt.allocPrint(
+        arena.allocator(),
+        "{s}/.config/sicl.json",
+        .{home_dir},
+    );
+    try config.updateWithConfig(arena.allocator(), config_path);
+
     var output_allocation = try arena.allocator().alloc(u8, 1024);
+    const menu_cmd = try cmdToArgv(arena.allocator(), config.menu_cmd.?);
 
-    const menu_cmd = try cmdToArgv(arena.allocator(), config.menu_cmd);
-
-    if (try run(arena.allocator(), config.csv_path, menu_cmd.items, output_allocation)) |command| {
+    if (try run(arena.allocator(), config.csv_path.?, menu_cmd.items, output_allocation)) |command| {
         var run_args = try std.ArrayList([]const u8).initCapacity(arena.allocator(), 32);
         var iter = std.mem.splitScalar(u8, command, ' ');
         while (iter.next()) |el| {
