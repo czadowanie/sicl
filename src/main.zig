@@ -29,7 +29,6 @@ fn parse(
 
     var i: usize = 0;
     while (lines.next()) |line| {
-        std.log.debug("line: '{s}'", .{line});
         var tokens = std.mem.splitScalar(u8, line, ';');
         if (tokens.next()) |key| {
             if (tokens.next()) |command| {
@@ -47,8 +46,8 @@ fn parse(
 
     return ParseOutput{
         .menu_input = menu_input[0..menu_input_pos],
-        .keys = keys,
-        .commands = commands,
+        .keys = keys[0..i],
+        .commands = commands[0..i],
     };
 }
 
@@ -63,18 +62,14 @@ fn runMenu(
     child.stderr_behavior = std.process.Child.StdIo.Inherit;
     try child.spawn();
 
-    std.log.debug("spawned menu! pid: {d}", .{child.id});
     try child.stdin.?.writeAll(menu_input);
     child.stdin.?.close();
     child.stdin = null;
-    std.log.debug("wrote input into menu", .{});
 
     const raw_output = try child.stdout.?.readToEndAlloc(allocator, 1024);
     const output = std.mem.trim(u8, raw_output, " \n\t");
 
     _ = try child.kill();
-
-    std.log.debug("menu exited", .{});
 
     if (output.len == 0) {
         return null;
@@ -102,8 +97,6 @@ pub fn run(
     const content = try file.readToEndAlloc(arena.allocator(), 1024 * 1024);
     const parsed = try parse(content, arena.allocator());
 
-    std.log.debug("menu_input:\n---\n{s}---\n", .{parsed.menu_input});
-
     const output = try runMenu(
         menu_cmd,
         arena.allocator(),
@@ -111,8 +104,6 @@ pub fn run(
     );
 
     if (output) |selected| {
-        std.log.debug("selected '{s}'", .{selected});
-
         const maybe_index: ?usize = blk: {
             for (0.., parsed.keys) |i, key| {
                 if (std.mem.eql(u8, key, selected)) {
@@ -177,12 +168,21 @@ const SiclConfig = struct {
     }
 };
 
+pub fn show_help() !void {
+    var stderr = std.io.getStdErr().writer();
+    try stderr.print("USAGE: sicl [options]\n", .{});
+    try stderr.print("OPTIONS: \n", .{});
+    try stderr.print("\tadd <alias> <command>\n", .{});
+    try stderr.print("\trm <alias>\n", .{});
+}
+
 pub fn main() !void {
+    // setup allocators
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
 
+    // config
     var config = try SiclConfig.default(arena.allocator());
-
     const home_dir = std.os.getenv("HOME") orelse return SiclError.HomeNotSet;
     const config_path = try std.fmt.allocPrint(
         arena.allocator(),
@@ -191,18 +191,72 @@ pub fn main() !void {
     );
     try config.updateWithConfig(arena.allocator(), config_path);
 
-    var output_allocation = try arena.allocator().alloc(u8, 1024);
-    const menu_cmd = try cmdToArgv(arena.allocator(), config.menu_cmd.?);
+    const args = try std.process.argsAlloc(arena.allocator());
 
-    if (try run(arena.allocator(), config.csv_path.?, menu_cmd.items, output_allocation)) |command| {
-        var run_args = try std.ArrayList([]const u8).initCapacity(arena.allocator(), 32);
-        var iter = std.mem.splitScalar(u8, command, ' ');
-        while (iter.next()) |el| {
-            try run_args.append(el);
+    if (args.len > 1) {
+        if (std.mem.eql(u8, args[1], "add")) {
+            // add an entry
+            if (args.len != 4) {
+                try show_help();
+                return;
+            }
+
+            const alias = args[2];
+            const cmd = args[3];
+
+            var csv = try std.fs.openFileAbsolute(
+                config.csv_path.?,
+                .{ .mode = std.fs.File.OpenMode.read_write },
+            );
+            try csv.seekFromEnd(0);
+
+            var writer = csv.writer();
+            try writer.print("{s};{s}\n", .{ alias, cmd });
+        } else if (std.mem.eql(u8, args[1], "rm")) {
+            // remove an entry
+            if (args.len != 3) {
+                try show_help();
+                return;
+            }
+
+            const alias = args[2];
+
+            var csv = try std.fs.openFileAbsolute(
+                config.csv_path.?,
+                .{ .mode = std.fs.File.OpenMode.read_write },
+            );
+            const content = try csv.readToEndAlloc(arena.allocator(), 1024 * 1024);
+            const parsed = try parse(content, arena.allocator());
+
+            try csv.seekTo(0);
+            var writer = csv.writer();
+
+            for (0..parsed.keys.len) |i| {
+                const key = parsed.keys[i];
+                const command = parsed.commands[i];
+
+                if (!std.mem.eql(u8, key, alias)) {
+                    try writer.print("{s};{s}\n", .{ key, command });
+                }
+            }
+            try csv.setEndPos(try writer.context.getPos());
+        } else {
+            try show_help();
         }
-        var child = std.process.Child.init(run_args.items, arena.allocator());
-        _ = try child.spawnAndWait();
     } else {
-        std.log.info("no option selected", .{});
+        // run the menu
+        var output_allocation = try arena.allocator().alloc(u8, 1024);
+        const menu_cmd = try cmdToArgv(arena.allocator(), config.menu_cmd.?);
+        if (try run(arena.allocator(), config.csv_path.?, menu_cmd.items, output_allocation)) |command| {
+            var run_args = try std.ArrayList([]const u8).initCapacity(arena.allocator(), 32);
+            var iter = std.mem.splitScalar(u8, command, ' ');
+            while (iter.next()) |el| {
+                try run_args.append(el);
+            }
+            var child = std.process.Child.init(run_args.items, arena.allocator());
+            _ = try child.spawnAndWait();
+        } else {
+            std.log.info("no option selected", .{});
+        }
     }
 }
