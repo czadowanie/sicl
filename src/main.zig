@@ -197,13 +197,19 @@ fn show_help() !void {
 fn runMenuAndSelecion(allocator: mem.Allocator, config: SiclConfig) !void {
     var output_allocation = try allocator.alloc(u8, MAX_MENU_OUTPUT_SIZE);
     const menu_cmd = try cmdToArgv(allocator, config.menu_cmd.?);
+
     if (try run(allocator, config.csv_path.?, menu_cmd.items, output_allocation)) |command| {
+        // we don't need that anymore
+        menu_cmd.deinit();
+
         var run_args = try std.ArrayList([]const u8).initCapacity(allocator, 32);
         var iter = std.mem.splitScalar(u8, command, ' ');
         while (iter.next()) |el| {
             try run_args.append(el);
         }
+
         var child = std.process.Child.init(run_args.items, allocator);
+
         _ = try child.spawnAndWait();
     } else {
         std.log.info("no option selected", .{});
