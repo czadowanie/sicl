@@ -7,7 +7,7 @@ const ParseOutput = struct {
     commands: [][]const u8,
 };
 
-fn parse(
+fn parseCsv(
     content: []const u8,
     allocator: mem.Allocator,
 ) !ParseOutput {
@@ -95,7 +95,7 @@ pub fn run(
         else => return err,
     };
     const content = try file.readToEndAlloc(arena.allocator(), 1024 * 1024);
-    const parsed = try parse(content, arena.allocator());
+    const parsed = try parseCsv(content, arena.allocator());
 
     const output = try runMenu(
         menu_cmd,
@@ -166,9 +166,23 @@ const SiclConfig = struct {
         self.menu_cmd = options.menu_cmd orelse self.menu_cmd;
         self.csv_path = options.csv_path orelse self.csv_path;
     }
+
+    fn initWithConf(allocator: mem.Allocator) !@This() {
+        var config = try SiclConfig.default(allocator);
+
+        const home_dir = std.os.getenv("HOME") orelse return SiclError.HomeNotSet;
+        const config_path = try std.fmt.allocPrint(
+            allocator,
+            "{s}/.config/sicl.json",
+            .{home_dir},
+        );
+        try config.updateWithConfig(allocator, config_path);
+
+        return config;
+    }
 };
 
-pub fn show_help() !void {
+fn show_help() !void {
     var stderr = std.io.getStdErr().writer();
     try stderr.print("USAGE: sicl [options]\n", .{});
     try stderr.print("OPTIONS: \n", .{});
@@ -176,87 +190,87 @@ pub fn show_help() !void {
     try stderr.print("\trm <alias>\n", .{});
 }
 
+fn runMenuAndSelecion(allocator: mem.Allocator, config: SiclConfig) !void {
+    var output_allocation = try allocator.alloc(u8, 1024);
+    const menu_cmd = try cmdToArgv(allocator, config.menu_cmd.?);
+    if (try run(allocator, config.csv_path.?, menu_cmd.items, output_allocation)) |command| {
+        var run_args = try std.ArrayList([]const u8).initCapacity(allocator, 32);
+        var iter = std.mem.splitScalar(u8, command, ' ');
+        while (iter.next()) |el| {
+            try run_args.append(el);
+        }
+        var child = std.process.Child.init(run_args.items, allocator);
+        _ = try child.spawnAndWait();
+    } else {
+        std.log.info("no option selected", .{});
+    }
+}
+
+fn addEntry(args: []const []const u8, config: SiclConfig) !void {
+    // add an entry
+    if (args.len != 4) {
+        try show_help();
+        return;
+    }
+
+    const alias = args[2];
+    const cmd = args[3];
+
+    var csv = try std.fs.openFileAbsolute(
+        config.csv_path.?,
+        .{ .mode = std.fs.File.OpenMode.read_write },
+    );
+    try csv.seekFromEnd(0);
+
+    var writer = csv.writer();
+    try writer.print("{s};{s}\n", .{ alias, cmd });
+}
+
+fn removeEntry(allocator: mem.Allocator, args: []const []const u8, config: SiclConfig) !void {
+    if (args.len != 3) {
+        try show_help();
+        return;
+    }
+
+    const alias = args[2];
+
+    var csv = try std.fs.openFileAbsolute(
+        config.csv_path.?,
+        .{ .mode = std.fs.File.OpenMode.read_write },
+    );
+    const content = try csv.readToEndAlloc(allocator, 1024 * 1024);
+    const parsed = try parseCsv(content, allocator);
+
+    try csv.seekTo(0);
+    var writer = csv.writer();
+
+    for (0..parsed.keys.len) |i| {
+        const key = parsed.keys[i];
+        const command = parsed.commands[i];
+
+        if (!std.mem.eql(u8, key, alias)) {
+            try writer.print("{s};{s}\n", .{ key, command });
+        }
+    }
+    try csv.setEndPos(try writer.context.getPos());
+}
+
 pub fn main() !void {
-    // setup allocators
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
 
-    // config
-    var config = try SiclConfig.default(arena.allocator());
-    const home_dir = std.os.getenv("HOME") orelse return SiclError.HomeNotSet;
-    const config_path = try std.fmt.allocPrint(
-        arena.allocator(),
-        "{s}/.config/sicl.json",
-        .{home_dir},
-    );
-    try config.updateWithConfig(arena.allocator(), config_path);
+    const config = try SiclConfig.initWithConf(arena.allocator());
 
     const args = try std.process.argsAlloc(arena.allocator());
-
     if (args.len > 1) {
         if (std.mem.eql(u8, args[1], "add")) {
-            // add an entry
-            if (args.len != 4) {
-                try show_help();
-                return;
-            }
-
-            const alias = args[2];
-            const cmd = args[3];
-
-            var csv = try std.fs.openFileAbsolute(
-                config.csv_path.?,
-                .{ .mode = std.fs.File.OpenMode.read_write },
-            );
-            try csv.seekFromEnd(0);
-
-            var writer = csv.writer();
-            try writer.print("{s};{s}\n", .{ alias, cmd });
+            try addEntry(args, config);
         } else if (std.mem.eql(u8, args[1], "rm")) {
-            // remove an entry
-            if (args.len != 3) {
-                try show_help();
-                return;
-            }
-
-            const alias = args[2];
-
-            var csv = try std.fs.openFileAbsolute(
-                config.csv_path.?,
-                .{ .mode = std.fs.File.OpenMode.read_write },
-            );
-            const content = try csv.readToEndAlloc(arena.allocator(), 1024 * 1024);
-            const parsed = try parse(content, arena.allocator());
-
-            try csv.seekTo(0);
-            var writer = csv.writer();
-
-            for (0..parsed.keys.len) |i| {
-                const key = parsed.keys[i];
-                const command = parsed.commands[i];
-
-                if (!std.mem.eql(u8, key, alias)) {
-                    try writer.print("{s};{s}\n", .{ key, command });
-                }
-            }
-            try csv.setEndPos(try writer.context.getPos());
+            try removeEntry(arena.allocator(), args, config);
         } else {
             try show_help();
         }
     } else {
-        // run the menu
-        var output_allocation = try arena.allocator().alloc(u8, 1024);
-        const menu_cmd = try cmdToArgv(arena.allocator(), config.menu_cmd.?);
-        if (try run(arena.allocator(), config.csv_path.?, menu_cmd.items, output_allocation)) |command| {
-            var run_args = try std.ArrayList([]const u8).initCapacity(arena.allocator(), 32);
-            var iter = std.mem.splitScalar(u8, command, ' ');
-            while (iter.next()) |el| {
-                try run_args.append(el);
-            }
-            var child = std.process.Child.init(run_args.items, arena.allocator());
-            _ = try child.spawnAndWait();
-        } else {
-            std.log.info("no option selected", .{});
-        }
+        try runMenuAndSelecion(arena.allocator(), config);
     }
 }
