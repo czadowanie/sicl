@@ -162,13 +162,13 @@ const SiclConfig = struct {
     }
 
     fn updateWithConfig(self: *@This(), allocator: mem.Allocator, path: []const u8) !void {
-        var file = try std.fs.openFileAbsolute(path, .{});
+        var file = std.fs.openFileAbsolute(path, .{}) catch return;
         defer file.close();
         const content = try file.readToEndAlloc(allocator, MAX_CONFIG_SIZE);
         const options = try std.json.parseFromSlice(SiclConfig, allocator, content, std.json.ParseOptions{});
 
-        self.menu_cmd = options.menu_cmd orelse self.menu_cmd;
-        self.csv_path = options.csv_path orelse self.csv_path;
+        self.menu_cmd = options.value.menu_cmd orelse self.menu_cmd;
+        self.csv_path = options.value.csv_path orelse self.csv_path;
     }
 
     fn initWithConf(allocator: mem.Allocator) !@This() {

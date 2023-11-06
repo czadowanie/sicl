@@ -25,4 +25,5 @@ And it will pass them to your favorite menu program.
 The default configuration is provided in [sicl.json](./sicl.json)
 
 - `menu_cmd` - menu program you want to use
-- `csv_path` - an absolute path to where you want to store all of the aliases, when set to null it's going touse "$HOME/.local/share/sicl.csv"
+- `csv_path` - an absolute path to where you want to store all of the aliases, when set to 
+null it's going to use "$HOME/.local/share/sicl.csv"
