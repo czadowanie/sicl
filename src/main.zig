@@ -192,6 +192,7 @@ fn show_help() !void {
     try stderr.print("OPTIONS: \n", .{});
     try stderr.print("\tadd <alias> <command>\n", .{});
     try stderr.print("\trm <alias>\n", .{});
+    try stderr.print("\tedit - opens up the $EDITOR on the csv file\n", .{});
 }
 
 fn runMenuAndSelecion(allocator: mem.Allocator, config: SiclConfig) !void {
@@ -276,6 +277,18 @@ pub fn main() !void {
             try addEntry(args, config);
         } else if (std.mem.eql(u8, args[1], "rm")) {
             try removeEntry(arena.allocator(), args, config);
+        } else if (std.mem.eql(u8, args[1], "edit")) {
+            const editor = std.process.getEnvVarOwned(arena.allocator(), "EDITOR") catch "/usr/bin/nano";
+            const argv = [_][]const u8{ editor, config.csv_path.? };
+            var child = std.process.Child.init(&argv, arena.allocator());
+            child.stdin_behavior = .Inherit;
+            child.stdout_behavior = .Inherit;
+            child.stderr_behavior = .Inherit;
+            _ = child.spawnAndWait() catch |e| {
+                if (e == error.FileNotFound) {
+                    std.log.err("'{s}' doesn't exist", .{editor});
+                } else return e;
+            };
         } else {
             try show_help();
         }
