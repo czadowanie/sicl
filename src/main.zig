@@ -148,7 +148,7 @@ const SiclConfig = struct {
     csv_path: ?[]const u8,
 
     fn default(allocator: mem.Allocator) !@This() {
-        const home_dir = std.os.getenv("HOME") orelse return SiclError.HomeNotSet;
+        const home_dir = std.posix.getenv("HOME") orelse return SiclError.HomeNotSet;
         const csv_path = try std.fmt.allocPrint(
             allocator,
             "{s}/.local/share/sicl.csv",
@@ -174,7 +174,7 @@ const SiclConfig = struct {
     fn initWithConf(allocator: mem.Allocator) !@This() {
         var config = try SiclConfig.default(allocator);
 
-        const home_dir = std.os.getenv("HOME") orelse return SiclError.HomeNotSet;
+        const home_dir = std.posix.getenv("HOME") orelse return SiclError.HomeNotSet;
         const config_path = try std.fmt.allocPrint(
             allocator,
             "{s}/.config/sicl.json",
@@ -196,7 +196,7 @@ fn show_help() !void {
 }
 
 fn runMenuAndSelecion(allocator: mem.Allocator, config: SiclConfig) !void {
-    var output_allocation = try allocator.alloc(u8, MAX_MENU_OUTPUT_SIZE);
+    const output_allocation = try allocator.alloc(u8, MAX_MENU_OUTPUT_SIZE);
     const menu_cmd = try cmdToArgv(allocator, config.menu_cmd.?);
 
     if (try run(allocator, config.csv_path.?, menu_cmd.items, output_allocation)) |command| {
