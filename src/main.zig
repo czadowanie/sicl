@@ -170,8 +170,8 @@ const SiclConfig = struct {
 
 fn show_help() !void {
     var stderr = std.io.getStdErr().writer();
-    try stderr.print("USAGE: sicl [options]\n", .{});
-    try stderr.print("OPTIONS: \n", .{});
+    try stderr.print("USAGE: sicl [subcommand]\n", .{});
+    try stderr.print("SUBCOMMANDS: \n", .{});
     try stderr.print("\tadd <alias> <command>\n", .{});
     try stderr.print("\trm <alias>\n", .{});
     try stderr.print("\tedit - opens up the $EDITOR on the csv file\n", .{});
