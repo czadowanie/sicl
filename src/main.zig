@@ -1,7 +1,7 @@
 const std = @import("std");
 const mem = std.mem;
+const fs = std.fs;
 
-const MAX_CONFIG_SIZE = 1024 * 1024;
 const MAX_CSV_SIZE = 1024 * 1024;
 const MAX_MENU_OUTPUT_SIZE = 1024;
 
@@ -91,8 +91,8 @@ pub fn run(
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
 
-    const file = std.fs.openFileAbsolute(csv_path, .{}) catch |err| switch (err) {
-        std.fs.File.OpenError.FileNotFound => {
+    const file = fs.cwd().openFile(csv_path, .{}) catch |err| switch (err) {
+        fs.File.OpenError.FileNotFound => {
             std.log.err("file not found {s}", .{csv_path});
             return null;
         },
@@ -144,11 +144,14 @@ fn cmdToArgv(allocator: mem.Allocator, command: []const u8) !std.ArrayList([]con
 }
 
 const SiclConfig = struct {
-    menu_cmd: ?[]const u8,
-    csv_path: ?[]const u8,
+    menu_cmd: []const u8,
+    csv_path: []const u8,
 
-    fn default(allocator: mem.Allocator) !@This() {
-        const home_dir = std.posix.getenv("HOME") orelse return SiclError.HomeNotSet;
+    fn init(allocator: mem.Allocator) !@This() {
+        const home_dir = std.process.getEnvVarOwned(
+            allocator,
+            "HOME",
+        ) catch return SiclError.HomeNotSet;
         const csv_path = try std.fmt.allocPrint(
             allocator,
             "{s}/.local/share/sicl.csv",
@@ -157,32 +160,11 @@ const SiclConfig = struct {
 
         return SiclConfig{
             .csv_path = csv_path,
-            .menu_cmd = "bemenu",
+            .menu_cmd = std.process.getEnvVarOwned(
+                allocator,
+                "SICL_MENU",
+            ) catch "menu",
         };
-    }
-
-    fn updateWithConfig(self: *@This(), allocator: mem.Allocator, path: []const u8) !void {
-        var file = std.fs.openFileAbsolute(path, .{}) catch return;
-        defer file.close();
-        const content = try file.readToEndAlloc(allocator, MAX_CONFIG_SIZE);
-        const options = try std.json.parseFromSlice(SiclConfig, allocator, content, std.json.ParseOptions{});
-
-        self.menu_cmd = options.value.menu_cmd orelse self.menu_cmd;
-        self.csv_path = options.value.csv_path orelse self.csv_path;
-    }
-
-    fn initWithConf(allocator: mem.Allocator) !@This() {
-        var config = try SiclConfig.default(allocator);
-
-        const home_dir = std.posix.getenv("HOME") orelse return SiclError.HomeNotSet;
-        const config_path = try std.fmt.allocPrint(
-            allocator,
-            "{s}/.config/sicl.json",
-            .{home_dir},
-        );
-        try config.updateWithConfig(allocator, config_path);
-
-        return config;
     }
 };
 
@@ -193,13 +175,16 @@ fn show_help() !void {
     try stderr.print("\tadd <alias> <command>\n", .{});
     try stderr.print("\trm <alias>\n", .{});
     try stderr.print("\tedit - opens up the $EDITOR on the csv file\n", .{});
+    try stderr.print("ENV VARIABLES:\n", .{});
+    try stderr.print("\t$SICL_MENU - the menu command you want to use (default 'menu')\n", .{});
+    try stderr.print("\n", .{});
 }
 
 fn runMenuAndSelecion(allocator: mem.Allocator, config: SiclConfig) !void {
     const output_allocation = try allocator.alloc(u8, MAX_MENU_OUTPUT_SIZE);
-    const menu_cmd = try cmdToArgv(allocator, config.menu_cmd.?);
+    const menu_cmd = try cmdToArgv(allocator, config.menu_cmd);
 
-    if (try run(allocator, config.csv_path.?, menu_cmd.items, output_allocation)) |command| {
+    if (try run(allocator, config.csv_path, menu_cmd.items, output_allocation)) |command| {
         // we don't need that anymore
         menu_cmd.deinit();
 
@@ -226,9 +211,9 @@ fn addEntry(args: []const []const u8, config: SiclConfig) !void {
     const alias = args[2];
     const cmd = args[3];
 
-    var csv = try std.fs.openFileAbsolute(
-        config.csv_path.?,
-        .{ .mode = std.fs.File.OpenMode.read_write },
+    var csv = try fs.cwd().openFile(
+        config.csv_path,
+        .{ .mode = fs.File.OpenMode.read_write },
     );
     try csv.seekFromEnd(0);
 
@@ -244,9 +229,9 @@ fn removeEntry(allocator: mem.Allocator, args: []const []const u8, config: SiclC
 
     const alias = args[2];
 
-    var csv = try std.fs.openFileAbsolute(
-        config.csv_path.?,
-        .{ .mode = std.fs.File.OpenMode.read_write },
+    var csv = try fs.cwd().openFile(
+        config.csv_path,
+        .{ .mode = .read_write },
     );
     const content = try csv.readToEndAlloc(allocator, MAX_CSV_SIZE);
     const parsed = try parseCsv(content, allocator);
@@ -269,7 +254,7 @@ pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
 
-    const config = try SiclConfig.initWithConf(arena.allocator());
+    const config = try SiclConfig.init(arena.allocator());
 
     const args = try std.process.argsAlloc(arena.allocator());
     if (args.len > 1) {
@@ -278,8 +263,11 @@ pub fn main() !void {
         } else if (std.mem.eql(u8, args[1], "rm")) {
             try removeEntry(arena.allocator(), args, config);
         } else if (std.mem.eql(u8, args[1], "edit")) {
-            const editor = std.process.getEnvVarOwned(arena.allocator(), "EDITOR") catch "/usr/bin/nano";
-            const argv = [_][]const u8{ editor, config.csv_path.? };
+            const editor = std.process.getEnvVarOwned(
+                arena.allocator(),
+                "EDITOR",
+            ) catch "/usr/bin/nano";
+            const argv = [_][]const u8{ editor, config.csv_path };
             var child = std.process.Child.init(&argv, arena.allocator());
             child.stdin_behavior = .Inherit;
             child.stdout_behavior = .Inherit;
