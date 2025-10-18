@@ -135,10 +135,10 @@ const SiclError = error{
 };
 
 fn cmdToArgv(allocator: mem.Allocator, command: []const u8) !std.ArrayList([]const u8) {
-    var output = std.ArrayList([]const u8).init(allocator);
+    var output = std.ArrayList([]const u8).empty;
     var iter = std.mem.splitScalar(u8, command, ' ');
     while (iter.next()) |el| {
-        try output.append(el);
+        try output.append(allocator, el);
     }
     return output;
 }
@@ -169,7 +169,7 @@ const SiclConfig = struct {
 };
 
 fn show_help() !void {
-    var stderr = std.io.getStdErr().writer();
+    var stderr = std.fs.File.stderr().deprecatedWriter();
     try stderr.print("USAGE: sicl [subcommand]\n", .{});
     try stderr.print("SUBCOMMANDS: \n", .{});
     try stderr.print("\tadd <alias> <command>\n", .{});
@@ -182,16 +182,16 @@ fn show_help() !void {
 
 fn runMenuAndSelecion(allocator: mem.Allocator, config: SiclConfig) !void {
     const output_allocation = try allocator.alloc(u8, MAX_MENU_OUTPUT_SIZE);
-    const menu_cmd = try cmdToArgv(allocator, config.menu_cmd);
+    var menu_cmd = try cmdToArgv(allocator, config.menu_cmd);
 
     if (try run(allocator, config.csv_path, menu_cmd.items, output_allocation)) |command| {
         // we don't need that anymore
-        menu_cmd.deinit();
+        menu_cmd.deinit(allocator);
 
         var run_args = try std.ArrayList([]const u8).initCapacity(allocator, 32);
         var iter = std.mem.splitScalar(u8, command, ' ');
         while (iter.next()) |el| {
-            try run_args.append(el);
+            try run_args.append(allocator, el);
         }
 
         var child = std.process.Child.init(run_args.items, allocator);
@@ -217,7 +217,7 @@ fn addEntry(args: []const []const u8, config: SiclConfig) !void {
     );
     try csv.seekFromEnd(0);
 
-    var writer = csv.writer();
+    var writer = csv.deprecatedWriter();
     try writer.print("{s};{s}\n", .{ alias, cmd });
 }
 
@@ -237,7 +237,7 @@ fn removeEntry(allocator: mem.Allocator, args: []const []const u8, config: SiclC
     const parsed = try parseCsv(content, allocator);
 
     try csv.seekTo(0);
-    var writer = csv.writer();
+    var writer = csv.deprecatedWriter();
 
     for (0..parsed.keys.len) |i| {
         const key = parsed.keys[i];
